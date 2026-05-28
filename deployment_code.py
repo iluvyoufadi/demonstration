@@ -1,10 +1,10 @@
 """
-Face Recognition API  —  deployment version
+Demo API  —  deployment version
 Loads best_model.pkl (dict with X_train / y_train / pipeline / threshold / size).
-Pipeline key drives preprocessing — same logic as deployment_code.py / notebook.
-Threshold: Euclidean 1-NN distance in raw 128-D dlib space (τ = 0.4495, Chapter 4).
+Pipeline key drives preprocessing
+Threshold: Euclidean 1-NN distance in raw 128-D dlib space (τ = 0.4495).
 
-Best model from notebook: pipeline="align_gamma"  ACC=97.62%  FRR=2.22%  FAR=1.63%
+Best model: pipeline="align_gamma"  ACC=97.62%  FRR=2.22%  FAR=1.63%
 """
 
 from fastapi import FastAPI, File, UploadFile
@@ -25,17 +25,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Load dlib models ──────────────────────────────────────────────────────────
+#Load dlib models
 detector  = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 face_rec  = dlib.face_recognition_model_v1("dlib_face_recognition_resnet_model_v1.dat")
 
-# ── Load best_model.pkl (dict format from notebook Section 8) ─────────────────
-# Keys: X_train, y_train, pipeline, threshold, size
+#Load best_model.pkl
+#Keys: X_train, y_train, pipeline, threshold, size
 _model    = joblib.load("best_model.pkl")
 X_TRAIN   = np.array(_model["X_train"], dtype=np.float64)
 Y_TRAIN   = np.array(_model["y_train"])
-PIPELINE  = _model["pipeline"]          # e.g. "align_gamma"
+PIPELINE  = _model["pipeline"]          
 THRESHOLD = float(_model["threshold"])  # 0.4495
 SIZE      = int(_model.get("size", 150))
 
@@ -43,12 +43,10 @@ print(f"[API] Pipeline : {PIPELINE}")
 print(f"[API] Threshold: {THRESHOLD}")
 print(f"[API] Train size: {len(X_TRAIN)} embeddings")
 
-# ── LFW integer / string label → display name ─────────────────────────────────
+#LFW integer / string label → display name
 # Y_TRAIN contains string folder names (person names) from the dataset structure.
 # No integer mapping needed — we match the nearest neighbour directly.
 
-
-# ── Preprocessing helpers (mirrors deployment_code.py exactly) ───────────────
 def apply_gamma(img: np.ndarray, gamma: float = 1.5) -> np.ndarray:
     table = np.array(
         [((i / 255.0) ** (1.0 / gamma)) * 255 for i in range(256)],
@@ -119,24 +117,24 @@ def compute_descriptor(face: np.ndarray) -> np.ndarray:
     return (emb1 + emb2) / 2.0
 
 
-# ── Response schema ───────────────────────────────────────────────────────────
+#Response schema
 class RecognitionResponse(BaseModel):
     recognized:   bool
     label:        str   # display label (person name or "N/A")
     name:         str   # same as label for consistency with Flutter model
     confidence:   float # nearest-neighbour distance expressed as % closeness
     distance:     float # NN Euclidean distance — best pipeline
-    raw_distance: float # NN Euclidean distance — bbox baseline (for comparison)
+    raw_distance: float # NN Euclidean distance — baseline (for comparison)
     face_found:   bool
 
 
 @app.post("/recognize", response_model=RecognitionResponse)
 async def recognize(file: UploadFile = File(...)):
-    # ── Decode ────────────────────────────────────────────────────────────────
+    # Decode
     contents = await file.read()
     img_rgb  = np.array(Image.open(io.BytesIO(contents)).convert("RGB"))
 
-    # ── Detect ────────────────────────────────────────────────────────────────
+    # Detect
     dets = detector(img_rgb, 1)
     if not dets:
         return RecognitionResponse(
@@ -147,7 +145,7 @@ async def recognize(file: UploadFile = File(...)):
     d     = dets[0]
     shape = predictor(img_rgb, d)
 
-    # ── Best-pipeline embedding ───────────────────────────────────────────────
+    # Best-pipeline embedding
     chip = get_face_chip(img_rgb, shape, PIPELINE, SIZE)
     if chip is None:
         return RecognitionResponse(
@@ -156,14 +154,14 @@ async def recognize(file: UploadFile = File(...)):
         )
     best_emb = compute_descriptor(chip).reshape(1, -1)
 
-    # ── Bbox baseline embedding (for Flutter comparison card) ─────────────────
+    # baseline embedding (for Flutter comparison card)
     h, w   = img_rgb.shape[:2]
     x1, y1 = max(0, d.left()), max(0, d.top())
     x2, y2 = min(w, d.right()), min(h, d.bottom())
     raw_crop = np.ascontiguousarray(cv2.resize(img_rgb[y1:y2, x1:x2], (SIZE, SIZE)))
     raw_emb  = compute_descriptor(raw_crop).reshape(1, -1)
 
-    # ── 1-NN in raw 128-D space (mirrors deployment_code.py recognize_face) ───
+    # 1-NN in raw 128-D space (mirrors deployment_code.py recognize_face)
     dists_best = np.linalg.norm(X_TRAIN - best_emb, axis=1)
     dists_raw  = np.linalg.norm(X_TRAIN - raw_emb,  axis=1)
 
@@ -172,7 +170,7 @@ async def recognize(file: UploadFile = File(...)):
     dist_raw   = float(np.min(dists_raw))
     pred_label = str(Y_TRAIN[best_idx])
 
-    # ── Threshold gate (τ = 0.4495, Chapter 4) ───────────────────────────────
+    # Threshold gate (τ = 0.4495)
     is_rec = dist_best <= THRESHOLD
 
     # Confidence: invert distance into 0-100 range for the UI bar
